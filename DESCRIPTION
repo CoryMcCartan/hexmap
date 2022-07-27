@@ -1,10 +1,15 @@
 Package: hexmap
-Title: Hexagonal-grid District Maps
+Title: Hexagonal Cartograms Inside State Boundaries
 Version: 0.0.0.9000
 Authors@R: 
     person("Cory", "McCartan", , "cmccartan@g.harvard.edu", role = c("aut", "cre"),
            comment = c(ORCID = "0000-0002-6251-669X"))
-Description: What the package does (one paragraph).
+Description: Automates the process of generating hexagonal cartograms for the U.S.,
+    in the style of the Daily Kos election maps <https://dkel.ec/map>.
+    Districts are built from hexagons and placed inside state boundaries to best
+    approximate their real-world geography. States are sized and positioned to
+    recreate the overall shape of the country while balancing the areas of each
+    district.
 Imports: 
     cli,
     dplyr,

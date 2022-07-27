@@ -38,6 +38,7 @@ ggplot(aes(fill=pre_16_dem_cli / (pre_16_dem_cli + pre_16_rep_tru))) +
     ggredist::theme_map() +
     theme(legend.position=c(0.1, 0.75))
 
-saveRDS(d_2020, "data-out/districts_2020_alarm_full.rds", compress="xz")
+write_rds(d_2020, "data-out/districts_2020_alarm.rds", compress="xz")
+write_sf(d_2020, "data-out/districts_2020_alarm.shp")
 
 
