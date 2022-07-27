@@ -8,4 +8,6 @@
 *.bak
 *.tmp
 *.rds
+*.json
 *.pdf
+
