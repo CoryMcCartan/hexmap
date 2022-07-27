@@ -30,10 +30,15 @@ d_2020 = imap_dfr(maps, function(m, abbr) {
 }) |>
     arrange(state, cd_2020)
 
+# fix SD
+idx = which(d_2020$state == "SD")
+d_2020$nrv[idx] = with(d_2020, (arv_16[idx] + arv_18[idx])/2)
+d_2020$ndv[idx] = with(d_2020, (adv_16[idx] + adv_18[idx])/2)
+
 shift_geometry(d_2020) |>
-ggplot(aes(fill=pre_16_dem_cli / (pre_16_dem_cli + pre_16_rep_tru))) +
+ggplot(aes(fill=ndv / (ndv + nrv))) +
     geom_sf(lwd=0.15, color='black') +
-    ggredist::scale_fill_party_b(name="2016 President",
+    ggredist::scale_fill_party_b(name="Baseline\nDem. Vote",
                                  limits=c(0.3, 0.7), na.value="black") +
     ggredist::theme_map() +
     theme(legend.position=c(0.1, 0.75))

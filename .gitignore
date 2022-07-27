@@ -8,6 +8,10 @@
 *.bak
 *.tmp
 *.rds
+*.dbf
+*.prj
+*.shp
+*.shx
 *.json
 *.pdf
 

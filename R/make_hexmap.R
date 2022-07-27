@@ -1,11 +1,20 @@
 make_hex_map = function(state, d_2020, d_usa, hex_per_district=5) {
-    d_state = dplyr::filter(d_2020, .data$state == state) |>
+    d_state = dplyr::filter(d_2020, .data$state == .env$state) |>
         sf::st_drop_geometry() |>
-        dplyr::mutate(district = as.integer(.data$district))
+        dplyr::rename(district = cd_2020)
+
+    if (nrow(d_state) == 1) {
+        d_state = dplyr::filter(d_2020, .data$state == .env$state) |>
+            dplyr::select(state, district=cd_2020) |>
+            sf::st_transform(5070)
+        d_state$geom_label = geomander::st_circle_center(d_state)$geometry
+        return(d_state)
+    }
+
     shp = d_2020$geometry[d_2020$state == state]
     outline = d_usa$geometry[d_usa$STUSPS == state]
 
-    cli::cli_h2(paste("Making map for", state))
+    cli::cli_h1(paste("Making map for", state))
     cli::cli_process_start("Making hexagonal grid")
 
     res = make_hex_grid(shp, outline, hex_per_district=hex_per_district)
@@ -41,7 +50,7 @@ make_hex_grid = function(shp, outline, hex_per_district=5, infl=1.05) {
         hex = sf::st_filter(sf::st_sf(geometry=hex), shp)
         base_area = median(as.numeric(sf::st_area(hex)))
         hex = sf::st_intersection(hex, outline) |>
-            dplyr::filter(as.numeric(sf::st_area(.data$geometry)) / base_area >= 0.333)
+            dplyr::filter(as.numeric(sf::st_area(.data$geometry)) / base_area >= 0.25)
 
         cuml_infl = cuml_infl * 1.1
     }
@@ -87,13 +96,15 @@ make_hex_grid = function(shp, outline, hex_per_district=5, infl=1.05) {
 }
 
 
-place_districts = function(res, n_runs=25L, max_bursts=250L, silent=FALSE) {
-    map = redist::redist_map(res$hex, pop=1, ndists=nrow(res$distr),
-                             pop_tol=1.25 * res$n_distr / nrow(res$hex),
+place_districts = function(res, n_runs=50L,
+                           max_bursts=300 + round(sqrt(res$n_distr)*25),
+                           silent=FALSE) {
+    map = redist::redist_map(res$hex, pop=1, ndists=res$n_distr,
+                             pop_tol=1.3 * res$n_distr^1.075 / nrow(res$hex),
                              adj=res$hex$adj)
 
     sc_close = scorer_close(res)
-    scorer = 4*redist::scorer_frac_kept(map) + 10*sc_close
+    scorer = redist::scorer_frac_kept(map) + 2*sc_close
 
     if (!silent) cli::cli_process_start("Initializing districts")
     inits = redist::redist_smc(map, max(round(3 * sqrt(n_runs*res$n_distr)), n_runs),
@@ -142,7 +153,7 @@ scorer_close = function(res) {
         center_y = tapply(m_coord_hex$Y, pl, mean)
         m_coords = 1e-6 * rbind(cbind(center_x, center_y), m_coord_shp)
         m_dist = as.matrix(dist(m_coords))[idx1, idx2]
-        RcppHungarian::HungarianSolver(m_dist)
+        RcppHungarian::HungarianSolver(m_dist^2)
     }
 
     fn <- function(plans) {
@@ -152,7 +163,7 @@ scorer_close = function(res) {
             shared_links = sapply(seq_len(res$n_distr), function(i) {
                 length(intersect(distr_adj[[i]], res$distr$adj[[i]]))
             })
-            mean(shared_links / tot_links) - 3*matcher$cost/res$n_distr - 10*sd(tapply(areas, pl, sum))
+            mean(shared_links / tot_links) - 6*matcher$cost/res$n_distr - 12*sd(tapply(areas, pl, sum))
         })
     }
 

@@ -1,143 +1,144 @@
 devtools::load_all(".")
 library(ggplot2)
+library(ggredist)
 
-d_2020 = readRDS("data-raw/districts_2020_538.rds")
+d_2020 = readRDS("data-out/districts_2020_alarm.rds")
 d_usa = tigris::states(cb=TRUE, resolution="20m", year=2020) |>
-    dplyr::filter(!STUSPS %in% c("PR", "DC")) |>
-    tigris::shift_geometry()
+    dplyr::filter(!STUSPS %in% c("PR", "DC"))
 
-# Make hexmap for a state -----
-hex_per_distr = 5
-STATE = "MA"
-
-d_state = dplyr::filter(d_2020, state == STATE) |>
-    sf::st_drop_geometry() |>
-    dplyr::mutate(district = as.integer(district))
-shp = d_2020$geometry[d_2020$state == STATE]
-if (STATE %in% c("CA", "NY")) {
-    # shp_raw = alarmdata::alarm_50state_map(STATE)
-    shp_raw = tigris::congressional_districts(STATE, cb=TRUE, year=2020)
-    shp = dplyr::as_tibble(shp_raw) |>
-        sf::st_as_sf() |>
-        dplyr::group_by(CD116FP) |>
-        dplyr::summarize() |>
-        dplyr::pull(geometry)
+# Make state hexmaps ----------
+state_hex = list()
+for (abbr in setdiff(state.abb, names(state_hex))) {
+    state_hex[[abbr]] = make_hex_map(abbr, d_2020, d_usa)
 }
-outline = d_usa$geometry[d_usa$STUSPS == STATE]
 
-res = make_hex_grid(shp, outline, hex_per_district=hex_per_distr)
+state_hex$MD |>
+    sf::st_transform(4269) |>
+    dplyr::mutate(
+        disp = sf::st_distance(
+            sf::st_centroid(geometry),
+            sf::st_centroid(d_2020$geometry[d_2020$state == state[1]]),
+            by_element=TRUE),
+        disp = as.numeric(disp) / 1609) |>
+ggplot(aes(fill=disp)) +
+    geom_sf(lwd=0.3, color="black") +
+    geom_sf_text(aes(geometry=geom_label, label=district),
+                 fontface="bold", size=3.0) +
+    wacolors::scale_fill_wa_c("puget") +
+    theme_map()
 
-out = place_districts(res)
+saveRDS(state_hex, "data-raw/hex1.rds", compress="gzip")
+# state_hex = readRDS("data-raw/hex1.rds")
 
-dplyr::left_join(out, d_state, by="district") |>
-    ggplot(aes(fill=0.5+pvi/200)) +
-    geom_sf(color="black") +
-    # geom_sf_text(aes(label=paste0(STATE, "-", district), geometry=geom_label),
-    geom_sf_text(aes(label=district, geometry=geom_label),
-                 data=out, inherit.aes=FALSE,
-                 size=5, color="#00000077", fontface="bold") +
-    ggredist::scale_fill_party_c(limits=c(0.3, 0.7)) +
-    guides(fill="none") +
-    ggredist::theme_map()
+state_hex = dplyr::bind_rows(state_hex)
 
-# Position and rescale states -----
+shifted_labels = state_hex |>
+    sf::st_set_geometry("geom_label") |>
+    sf::st_transform(4269) |>
+    tigris::shift_geometry() |>
+    dplyr::pull(geom_label)
 
-rescale = 1e6
-geom_usa = sf::st_union(d_usa$geometry) |>
-    sf::st_transform(5070)
-ctr_usa = sf::st_centroid(geom_usa)
+state_hex = state_hex |>
+    sf::st_transform(4269) |>
+    tigris::shift_geometry() |>
+    dplyr::mutate(geom_label = shifted_labels) |>
+    dplyr::left_join(sf::st_drop_geometry(d_2020),
+                     by=c("state", "district"="cd_2020"))
+
+
+# Position states -----
+
+## calculate rescaling -------
+d_states = state_hex |>
+    dplyr::group_by(state) |>
+    dplyr::summarize(n = dplyr::n()) |>
+    dplyr::mutate(ctr = sf::st_centroid(geometry),
+                  area = sf::st_area(geometry),
+                  rescale = 435 * as.numeric(area / sum(area)))
+hex_scale = sqrt(median(as.numeric(d_states$area)))
+scale_fac = with(d_states, sqrt(n / rescale))
+names(scale_fac) = d_states$state
+
+## load DK map and rescale ----------
 {
-d_states = dplyr::select(d_usa, state=STUSPS) |>
-    dplyr::left_join(dplyr::count(dplyr::as_tibble(d_2020), state), by="state") |>
-    sf::st_transform(5070)
-d_states$area = sf::st_area(d_states)
-d_states$area = 435 * as.numeric(d_states$area / sum(d_states$area))
-coords = sf::st_coordinates(sf::st_centroid(d_states$geometry)) / rescale
+dk_states = sf::read_sf("data-raw/HexSTv20/HexSTv20.shp") |>
+    dplyr::select(state=STATEAB) |>
+    sf::st_set_crs(3857) |>
+    suppressWarnings() |>
+    dplyr::mutate(area = as.numeric(sf::st_area(geometry)))
 
-ctr_state = sf::st_centroid(d_states$geometry)
-# dist_edge = sf::st_nearest_points(ctr_state, sf::st_cast(geom_usa, "MULTILINESTRING")) |>
-#     sf::st_length() |>
-#     as.numeric()
-# dist_edge = 1 + 0.5 * exp(-1 * dist_edge / max(dist_edge))
-# ctr_state = (ctr_state - ctr_usa) * dist_edge + ctr_usa
-# sf::st_crs(ctr_state) = 5070
-# ctr_state = sf::st_nearest_points(ctr_state, d_states$geometry, pairwise=TRUE) |>
-#     sf::st_cast("POINT")
-# ctr_state = (sf::st_centroid(d_states$geometry) + ctr_state[seq(2, length(ctr_state), 2)]) * 0.5
+dk_scale = sqrt(median(dk_states$area))
+m_scale = diag(2) / dk_scale
+dk_ctr = sf::st_centroid(sf::st_union(dk_states$geometry))
+dk_states$area = dk_states$area * m_scale[1, 1]
+dk_states$geometry = sf::st_centroid((dk_states$geometry - dk_ctr) * m_scale)
+
+# adjustments
+idx = which(dk_states$state == "DE")
+dk_states$geometry[idx] = dk_states$geometry[idx] + c(-0.02, 0.00)
+idx = which(dk_states$state == "NJ")
+dk_states$geometry[idx] = dk_states$geometry[idx] + c(-0.09, 0.00)
+idx = which(dk_states$state == "NY")
+dk_states$geometry[idx] = dk_states$geometry[idx] + c(0.08, -0.05)
+idx = which(dk_states$state %in% c("CT", "RI"))
+dk_states$geometry[idx] = dk_states$geometry[idx] + c(0.00, 0.02)
+idx = which(dk_states$state == "MT")
+dk_states$geometry[idx] = dk_states$geometry[idx] + c(0.00, -0.03)
+idx = which(dk_states$state == "OR")
+dk_states$geometry[idx] = dk_states$geometry[idx] + c(0.13, -0.01)
+idx = which(dk_states$state == "WA")
+dk_states$geometry[idx] = dk_states$geometry[idx] + c(0.10, 0.03)
+idx = which(dk_states$state %in% c("NJ", "NY", "CT", "MA", "RI", "VT", "NH", "ME"))
+dk_states$geometry[idx] = dk_states$geometry[idx] + c(0.06, -0.14)
+idx = which(dk_states$state == "FL")
+dk_states$geometry[idx] = dk_states$geometry[idx] + c(0.00, -0.07)
 }
 
-m_scale = with(d_states, sqrt(n / area))
-# m_scale = m_scale / max(m_scale)
-m_scale = m_scale * 0.7
+## scale and move -------
+state_hex2 = state_hex
 for (i in seq_len(nrow(d_states))) {
-    geom_i = d_states$geometry[i]
-    d_states$geometry[i] = (geom_i - ctr_state[i]) * m_scale[i] + ctr_state[i]
+    abbr = d_states$state[i]
+    idx = which(state_hex2$state == abbr)
+    sc = scale_fac[d_states$state[i]]
+    # sc = 0.8
+    new_ctr = dk_states$geometry[dk_states$state == abbr] * (diag(2) * hex_scale * 0.88)
+    state_hex2$geometry[idx] = (state_hex2$geometry[idx] - d_states$ctr[i]) * sc + new_ctr
+    state_hex2$geom_label[idx] = (state_hex2$geom_label[idx] - d_states$ctr[i]) * sc + new_ctr
+    if (abbr == "AK") {
+        state_hex2$geometry[idx] = rmapshaper::ms_simplify(state_hex2$geometry[idx], 0.02)
+    }
 }
+plot(state_hex2$geometry)
 
-{
-plot(geom_usa)
-# plot(sf::st_transform(d_usa$geometry, 5070))
-plot(d_states['n'], add=T)
-# plot(ctr_state, cex=dist_edge, add=T)
-}
+saveRDS(state_hex2, "data-out/districts_2020_hex.rds", compress="gzip")
 
-area_adj = with(d_states, sqrt(n / area))
-adj = sf::st_buffer(d_usa, 50e3) |>
-    geomander::adjacency() |>
-    lapply(\(x) x + 1L)
-m_adj = 0 * diag(nrow(coords))
-for (i in seq_len(nrow(coords))) {
-    m_adj[i, adj[[i]]] = 1
-    m_adj[adj[[i]], i] = 1
-}
-areas = as.numeric(sqrt(sf::st_area(sf::st_convex_hull(d_states)))/1e6)
-pair_area = outer(areas, areas, "+")
-dx0 = outer(coords[, 1], coords[, 1], "-")
-dy0 = outer(coords[, 2], coords[, 2], "-")
-angle0 = atan2(dy0, dx0)
+d_sum = d_2020 |>
+    dplyr::as_tibble() |>
+    dplyr::transmute(state=state,
+                     district=cd_2020,
+                     area = as.numeric(sf::st_area(sf::st_make_valid(geometry))) / 1609^2,
+                     dens = pop / area)
 
-plot(sf::st_transform(d_usa$geometry, 5070))
-plot(ctr_state, cex=8*areas, add=T)
-plot(coords, cex=8*areas)
-# plot(d_us$geometry)
-
-{
-k = list(spring = 1.0 / mean(lengths(adj)) / mean(abs(log(area_adj))),
-         loc = 0.25,
-         ctr = 0.00,
-         rel = 2.50,
-         repel = 0.000 / sum(area_adj))
-
-energy = function(x) {
-    x = coords + matrix(x, ncol=2)
-    dm = as.matrix(dist(x))
-    dx = outer(x[, 1], x[, 1], "-")
-    dy = outer(x[, 2], x[, 2], "-")
-    adj_dist = dm - 0.5*pair_area
-    adj_dist[adj_dist < 0.1] = 0.1
-
-    ctr_dist = -0.25 + (dm - 0.5*pair_area)
-    e_attract = 0.5 * k$spring * rowSums(m_adj * ctr_dist^2) * abs(log(area_adj))
-    e_loc = k$loc * rowSums((x - coords)^2)
-    e_ctr = k$ctr * mean(matrixStats::rowMaxs(dm))
-    # e_rel = k$rel * rowSums(pnorm(-dx*dx0) + pnorm(-dy*dy0))
-    angle_diff = (pi + atan2(dy, dx) - angle0) %% (2*pi) - pi
-    e_rel = k$rel * rowSums(angle_diff^2)
-    e_repel = k$repel * rowSums(area_adj / adj_dist^3)
-    e_attract + e_rel + e_loc + e_ctr + e_repel
-}
-
-opt = optim(rep(0, length(coords)), \(x) mean(energy(x)),
-            method="L-BFGS-B", control=list(factr=1e10))
-shift = matrix(opt$par, ncol=2)
-
-geom2 = d_states$geometry
-for (i in seq_along(geom2)) {
-    geom2[i] = geom2[i] + shift[i, ]*rescale
-}
-ggplot(d_states, aes(fill=energy(shift), geometry=geom2)) + geom_sf(lwd=0.4) + theme_void()
-}
-
-
-ggplot(d_states, aes(fill=energy(shift))) + geom_sf(lwd=0.4) + theme_void()
-ggplot(d_states, aes(fill=abs(log(area_adj)))) + geom_sf(lwd=0.4) + theme_void()
+state_hex2 |>
+    dplyr::left_join(d_sum, by=c("state", "district")) |>
+    dplyr::mutate(dem_16 = pre_16_dem_cli / (pre_16_dem_cli + pre_16_rep_tru),
+                  dem_18 = adv_18 / (adv_18 + arv_18),
+                  dem_20 = pre_20_dem_bid / (pre_20_dem_bid + pre_20_rep_tru),
+                  dem = ndv / (ndv + nrv)) |>
+# ggplot(aes(fill=dens)) +
+ggplot(aes(fill=dem)) +
+# ggplot(aes(fill=vap_aian/vap)) +
+# ggplot(aes(fill=dem_20-dem_16)) +
+    geom_sf(lwd=0.3, color="black") +
+    # geom_sf_text(aes(geometry=geom_label, label=district),
+                 # fontface="bold", size=2.4, color="#ffffff88") +
+    # wacolors::scale_fill_wa_c(trans="sqrt") +
+    # scale_fill_party_b(limits=c(0.35, 0.65)) +
+    # scale_fill_party_c(midpoint=0, limits=c(-0.1, 0.1), labels=scales::percent) +
+    scale_fill_party_c(limits=c(0.3, 0.7), labels=scales::percent) +
+    # wacolors::scale_fill_wa_b("ferries", which=1:15, reverse=T, trans="log10",
+    #                           name="People / sq. mi.",
+    #                           breaks=round(0.1 * 10^seq(1.6, 4, length.out=4))*10,
+    #                           labels=\(x) scales::comma(x, 1), oob=scales::squish) +
+    theme_map() +
+    theme(legend.position=c(0.9, 0.4))
