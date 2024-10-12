@@ -12,7 +12,7 @@ for (abbr in setdiff(state.abb, names(state_hex))) {
     state_hex[[abbr]] = make_hex_map(abbr, d_2020, d_usa)
 }
 
-state_hex$MD |>
+state_hex$IN |>
     sf::st_transform(4269) |>
     dplyr::mutate(
         disp = sf::st_distance(

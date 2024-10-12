@@ -31,9 +31,9 @@ d_2020 = imap_dfr(maps, function(m, abbr) {
     arrange(state, cd_2020)
 
 # fix SD
-idx = which(d_2020$state == "SD")
-d_2020$nrv[idx] = with(d_2020, (arv_16[idx] + arv_18[idx])/2)
-d_2020$ndv[idx] = with(d_2020, (adv_16[idx] + adv_18[idx])/2)
+# idx = which(d_2020$state == "SD")
+# d_2020$nrv[idx] = with(d_2020, (arv_16[idx] + arv_18[idx])/2)
+# d_2020$ndv[idx] = with(d_2020, (adv_16[idx] + adv_18[idx])/2)
 
 shift_geometry(d_2020) |>
 ggplot(aes(fill=ndv / (ndv + nrv))) +
